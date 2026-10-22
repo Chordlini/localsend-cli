@@ -65,6 +65,8 @@ def _make_ssl_context_client():
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    if _CLIENT_CERT_CHAIN is not None:
+        ctx.load_cert_chain(*_CLIENT_CERT_CHAIN)
     return ctx
 
 # ---------------------------------------------------------------------------
@@ -254,7 +256,9 @@ def _upload_file(receiver_ip, receiver_port, session_id, file_id, token, filepat
 # ---------------------------------------------------------------------------
 
 def cmd_send(args):
+    global _CLIENT_CERT_CHAIN
     certfile, keyfile, fingerprint = _generate_self_signed_cert()
+    _CLIENT_CERT_CHAIN = (certfile, keyfile)
     alias = _get_alias(args)
 
     # Validate files exist
@@ -669,7 +673,9 @@ def _run_multicast_listener(server, alias, fingerprint, listen_port=PORT):
 
 
 def cmd_receive(args):
+    global _CLIENT_CERT_CHAIN
     certfile, keyfile, fingerprint = _generate_self_signed_cert()
+    _CLIENT_CERT_CHAIN = (certfile, keyfile)
     alias = _get_alias(args)
     save_dir = os.path.expanduser(args.save_dir)
     auto_accept = args.yes
