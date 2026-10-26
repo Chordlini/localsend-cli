@@ -448,8 +448,37 @@ class ReceiveHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self):
-        length = int(self.headers.get("Content-Length", 0))
-        return self.rfile.read(length)
+        return b"".join(self._iter_body())
+
+    def _iter_body(self):
+        """Yield the request body, handling both Content-Length and chunked encoding."""
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            while True:
+                size_line = self.rfile.readline()
+                if not size_line:
+                    return
+                size = int(size_line.split(b";", 1)[0].strip() or b"0", 16)
+                if size == 0:
+                    # Skip trailers up to the terminating blank line
+                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    return
+                remaining = size
+                while remaining:
+                    chunk = self.rfile.read(min(CHUNK, remaining))
+                    if not chunk:
+                        return
+                    remaining -= len(chunk)
+                    yield chunk
+                self.rfile.readline()  # CRLF after chunk data
+        else:
+            remaining = int(self.headers.get("Content-Length", 0))
+            while remaining:
+                chunk = self.rfile.read(min(CHUNK, remaining))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
+                yield chunk
 
     def _parse_qs(self):
         from urllib.parse import urlparse, parse_qs
@@ -461,6 +490,7 @@ class ReceiveHandler(http.server.BaseHTTPRequestHandler):
         if path in ("/api/localsend/v2/info", "/api/localsend/v1/info"):
             self._send_json(200, _device_info(
                 self.server.ls_alias, self.server.ls_fingerprint,
+                port=self.server.server_address[1],
             ))
         else:
             self._send_text(404, "Not found")
@@ -473,7 +503,11 @@ class ReceiveHandler(http.server.BaseHTTPRequestHandler):
             fp = body.get("fingerprint", "")
             if fp and fp != self.server.ls_fingerprint:
                 self.server.ls_devices[fp] = {"ip": self.client_address[0], "info": body}
-            self._send_text(200, "OK")
+            # Protocol v2: register must answer with our device info (HTTP-scan discovery relies on it)
+            self._send_json(200, _device_info(
+                self.server.ls_alias, self.server.ls_fingerprint,
+                port=self.server.server_address[1],
+            ))
             return
 
         if path in ("/api/localsend/v2/prepare-upload", "/api/localsend/v1/send-request"):
@@ -574,14 +608,10 @@ class ReceiveHandler(http.server.BaseHTTPRequestHandler):
                 dest = os.path.join(save_dir, f"{base} ({i}){ext}")
                 i += 1
 
-        length = int(self.headers.get("Content-Length", 0))
         received = 0
         try:
             with open(dest, "wb") as f:
-                while received < length:
-                    chunk = self.rfile.read(min(CHUNK, length - received))
-                    if not chunk:
-                        break
+                for chunk in self._iter_body():
                     f.write(chunk)
                     received += len(chunk)
         except Exception as e:
