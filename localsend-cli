@@ -634,6 +634,18 @@ class ReceiveHandler(http.server.BaseHTTPRequestHandler):
 class ReceiveServer(http.server.HTTPServer):
     """HTTPS server for receiving LocalSend transfers."""
 
+    # Bind a dual-stack IPv6 socket so the receiver answers on IPv6 as well as
+    # IPv4. Needed whenever the sender reaches us by IPv6 address (WAN, or a
+    # v6-only LAN); a plain AF_INET bind silently refuses those connections.
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        try:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except OSError:
+            pass
+        super().server_bind()
+
     def __init__(self, addr, handler, *, certfile, keyfile, alias, fingerprint, save_dir, auto_accept):
         super().__init__(addr, handler)
         self.socket = _make_ssl_context_server(certfile, keyfile).wrap_socket(
@@ -710,7 +722,7 @@ def cmd_receive(args):
     for try_port in [PORT, PORT + 1, PORT + 2]:
         try:
             server = ReceiveServer(
-                ("0.0.0.0", try_port), ReceiveHandler,
+                ("::", try_port), ReceiveHandler,
                 certfile=certfile, keyfile=keyfile,
                 alias=alias, fingerprint=fingerprint,
                 save_dir=save_dir, auto_accept=auto_accept,
